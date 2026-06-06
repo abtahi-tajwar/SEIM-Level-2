@@ -1,6 +1,6 @@
 # EVTX to JSON + Elasticsearch Search
 
-A simple Python tool that reads Windows Event Log (`.evtx`) files, converts them to JSON, and indexes the events in Elasticsearch so you can search them from the command line.
+A simple Python tool that reads Windows Event Log (`.evtx`) files, converts them to JSON, and indexes the events in Elasticsearch so you can search them from the command line or Kibana UI.
 
 ## What this tool does
 
@@ -17,6 +17,7 @@ The `process` command runs JSON export and Elasticsearch indexing **in parallel*
 |------|-------------|
 | `evtx_tool.py` | Main script |
 | `requirements.txt` | Python dependencies |
+| `docker-compose.yml` | Elasticsearch + Kibana stack |
 | `sample.evtx` | Sample Windows Event Log (30 events) |
 | `sample.json` | Generated JSON output (created after running `process`) |
 
@@ -28,8 +29,9 @@ Parsing EVTX files and searching them are two separate steps.
 
 - **EVTX → JSON** is handled entirely by Python. No Docker required.
 - **Search** requires **Elasticsearch**, which is a standalone search server that must be running and reachable at `http://localhost:9200`.
+- **Kibana** is Elasticsearch's web UI for exploring and querying indexed data at `http://localhost:5601`.
 
-This project does not bundle Elasticsearch. You need to run it yourself — locally, in the cloud, or via Docker. Docker is the quickest way to get a local Elasticsearch instance without a full manual install.
+This project does not bundle Elasticsearch or Kibana. You need to run them yourself — locally via Docker, in the cloud, or as a manual install. Docker Compose is the quickest way to start both services together without a full manual setup.
 
 If Elasticsearch is not running, commands like `search` will fail with connection or index errors.
 
@@ -38,7 +40,7 @@ If Elasticsearch is not running, commands like `search` will fail with connectio
 ## Prerequisites
 
 - **Python 3.9+**
-- **Docker** (recommended, for running Elasticsearch locally)
+- **Docker** and **Docker Compose** (recommended, for Elasticsearch + Kibana)
 - **pip**
 
 ---
@@ -53,18 +55,20 @@ pip install -r requirements.txt
 
 ---
 
-## Start Elasticsearch with Docker
+## Start Elasticsearch and Kibana with Docker
 
-Run this once before indexing or searching:
+From the project directory, start both services:
 
 ```bash
-docker run -d \
-  --name elasticsearch \
-  -p 9200:9200 \
-  -e discovery.type=single-node \
-  -e xpack.security.enabled=false \
-  docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+docker compose up -d
 ```
+
+This starts:
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| Elasticsearch | http://localhost:9200 | Search backend used by `evtx_tool.py` |
+| Kibana | http://localhost:5601 | Web UI to browse and query indexed events |
 
 Verify Elasticsearch is up:
 
@@ -74,14 +78,56 @@ curl http://localhost:9200
 
 You should see a JSON response with `"tagline": "You Know, for Search"`.
 
-### Stop / remove the container (optional)
+Open Kibana in your browser:
+
+```
+http://localhost:5601
+```
+
+Kibana may take 30–60 seconds to become ready on first startup. Check status with:
+
+```bash
+docker compose ps
+```
+
+### Stop / remove the stack (optional)
+
+```bash
+docker compose down
+```
+
+To also remove persisted Elasticsearch data:
+
+```bash
+docker compose down -v
+```
+
+If you remove the volume, you will need to re-run `process` (or let `search` auto-index) to reload events.
+
+### Port 9200 already in use
+
+If `docker compose up -d` fails with `Bind for 0.0.0.0:9200 failed: port is already allocated`, an old Elasticsearch container is still running (often from a previous standalone `docker run`).
+
+Check what is using the port:
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep 9200
+```
+
+Stop and remove the conflicting container, then start the stack again:
 
 ```bash
 docker stop elasticsearch
 docker rm elasticsearch
+docker compose up -d
 ```
 
-Data is stored inside the container. If you remove it, you will need to re-run `process` (or let `search` auto-index) to reload events.
+If compose is in a bad state after the failed start:
+
+```bash
+docker compose down
+docker compose up -d
+```
 
 ---
 
@@ -112,6 +158,8 @@ Indexed 30 events into Elasticsearch index 'evtx-events'
 
 ### Step 2 — Search indexed events
 
+**From the command line:**
+
 ```bash
 python3 evtx_tool.py search "event_id:5145"
 ```
@@ -127,6 +175,28 @@ If the Elasticsearch index does not exist yet, `search` will **auto-index** from
 
 ```bash
 python3 evtx_tool.py search "event_id:5145" --no-auto-index
+```
+
+**From Kibana:**
+
+1. Open http://localhost:5601
+2. Go to **Management → Stack Management → Data Views**
+3. Click **Create data view**
+4. Set the name to `evtx-events` and the index pattern to `evtx-events`
+5. Choose `@timestamp` as the time field, then save
+6. Open **Discover**, select the `evtx-events` data view, and browse your events
+
+You can also query in **Dev Tools** (`Management → Dev Tools`):
+
+```json
+GET evtx-events/_search
+{
+  "query": {
+    "query_string": {
+      "query": "event_id:5145"
+    }
+  }
+}
 ```
 
 ---
@@ -166,9 +236,11 @@ These flags work with both `process` and `search`:
 
 | Problem | Likely cause | Fix |
 |---------|--------------|-----|
-| `Elasticsearch is not reachable` | ES not running | Start the Docker container (see above) |
+| `Elasticsearch is not reachable` | Stack not running | Run `docker compose up -d` |
+| Kibana shows "Unable to connect" | ES still starting | Wait ~60s, then run `docker compose ps` |
 | `index_not_found_exception` | Index never created | Run `python3 evtx_tool.py process sample.evtx` |
 | Empty search results | Wrong query or empty index | Re-run `process` or check your query syntax |
+| Port already in use | Old container running | Run `docker compose down`, or remove any standalone `elasticsearch` container from a previous `docker run` |
 
 ---
 
@@ -178,15 +250,15 @@ These flags work with both `process` and `search`:
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Start Elasticsearch
-docker run -d --name elasticsearch -p 9200:9200 \
-  -e discovery.type=single-node \
-  -e xpack.security.enabled=false \
-  docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+# 2. Start Elasticsearch + Kibana
+docker compose up -d
 
 # 3. Parse, export, and index
 python3 evtx_tool.py process sample.evtx
 
-# 4. Search
+# 4. Search from CLI
 python3 evtx_tool.py search "event_id:5145"
+
+# 5. Browse in Kibana
+open http://localhost:5601
 ```

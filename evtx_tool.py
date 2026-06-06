@@ -175,10 +175,8 @@ def get_es_client(es_url: str) -> Elasticsearch:
     if not es.ping():
         raise ConnectionError(
             f"Elasticsearch is not reachable at {es_url}. "
-            "Start it first, e.g.:\n"
-            "  docker run -d --name elasticsearch -p 9200:9200 "
-            "-e discovery.type=single-node -e xpack.security.enabled=false "
-            "docker.elastic.co/elasticsearch/elasticsearch:8.13.4"
+            "Start it first with:\n"
+            "  docker compose up -d"
         )
     return es
 
